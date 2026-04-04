@@ -1,57 +1,60 @@
-import datetime
+from datetime import datetime
+from datetime import timedelta
 
-from fastapi import HTTPException
-from fastapi import status
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from models.claim import Claim
 from models.disruption import DisruptionEvent
 from models.policy import Policy
+from models.worker import Worker
+from services.llm_service import analyze_fraud_llm
 
 
-def calculate_fraud_score(worker_id: str, event_id: str, db: Session) -> float:
-    trust_score = 1.0
-
+def analyze_claim(
+    worker_id: str,
+    event_id: str,
+    policy_id: str,
+    db: Session,
+) -> dict:
+    """Analyze a claim for fraud using LLM."""
     event = db.query(DisruptionEvent).filter(DisruptionEvent.id == event_id).first()
-    if not event:
-        trust_score -= 0.15
-    else:
-        if not event.verified:
-            trust_score -= 0.15
 
-    since_7d = datetime.datetime.utcnow() - datetime.timedelta(days=7)
-    claims_last_7d = (
+    policy = db.query(Policy).filter(Policy.id == policy_id).first()
+
+    worker = db.query(Worker).filter(Worker.id == worker_id).first()
+
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    recent_claims = (
         db.query(Claim)
         .join(Policy, Claim.policy_id == Policy.id)
-        .filter(and_(Policy.worker_id == worker_id, Claim.created_at >= since_7d))
+        .filter(and_(Policy.worker_id == worker_id, Claim.created_at >= seven_days_ago))
         .count()
     )
-    if claims_last_7d > 3:
-        trust_score -= 0.20
 
     duplicate = (
         db.query(Claim)
-        .join(Policy, Claim.policy_id == Policy.id)
-        .filter(and_(Policy.worker_id == worker_id, Claim.event_id == event_id))
+        .filter(and_(Claim.policy_id == policy_id, Claim.event_id == event_id))
         .first()
-    )
-    if duplicate:
-        trust_score -= 0.40
+    ) is not None
 
-    policy = (
-        db.query(Policy)
-        .filter(and_(Policy.worker_id == worker_id, Policy.status == "active"))
-        .order_by(Policy.created_at.desc())
-        .first()
-    )
+    policy_before_event = True
     if policy and event:
-        if policy.created_at and event.started_at and policy.created_at > event.started_at:
-            trust_score -= 0.30
+        policy_date = datetime.combine(policy.week_start_date, datetime.min.time())
+        policy_before_event = policy_date <= event.started_at
 
-    return max(0.0, float(trust_score))
+    days_as_customer = 30
+    if worker:
+        days_as_customer = max(1, (datetime.utcnow() - worker.created_at).days)
 
-
-def is_claim_auto_approvable(fraud_score: float) -> bool:
-    return fraud_score >= 0.85
-
+    result = analyze_fraud_llm(
+        event_type=event.event_type if event else "unknown",
+        event_severity=event.severity_value if event else 0,
+        zone_pincode=event.zone_pincode if event else "unknown",
+        claims_last_7_days=recent_claims,
+        policy_created_before_event=policy_before_event,
+        event_verified_by_api=event.verified if event else False,
+        is_duplicate=duplicate,
+        days_as_customer=days_as_customer,
+    )
+    return result

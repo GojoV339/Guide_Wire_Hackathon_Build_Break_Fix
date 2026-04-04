@@ -1,40 +1,7 @@
-import datetime
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
-from pydantic import ConfigDict
-
-
-class WorkerCreate(BaseModel):
-    phone_number: str
-    home_zone_pincode: str
-    daily_earnings_declared: float
-
-
-class WorkerUpdate(BaseModel):
-    name: Optional[str] = None
-    aadhaar_verified: Optional[bool] = None
-    platform_partner_id: Optional[str] = None
-    upi_id: Optional[str] = None
-
-
-class WorkerResponse(BaseModel):
-    id: str
-    phone_number: str
-    name: Optional[str]
-    aadhaar_verified: bool
-    platform_partner_id: Optional[str]
-    home_zone_pincode: str
-    daily_earnings_declared: float
-    upi_id: Optional[str]
-    risk_score: float
-    is_active: bool
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-    otp: Optional[str]
-    otp_expires_at: Optional[datetime.datetime]
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class OTPRequest(BaseModel):
@@ -48,6 +15,31 @@ class OTPVerify(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
-    token_type: str
+    token_type: str = "bearer"
     worker_id: str
 
+
+class WorkerProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    home_zone_pincode: Optional[str] = None
+    home_zone_name: Optional[str] = None
+    daily_earnings_declared: Optional[float] = None
+    upi_id: Optional[str] = None
+    platform_partner_id: Optional[str] = None
+
+
+class WorkerResponse(BaseModel):
+    id: str
+    phone_number: str
+    name: Optional[str]
+    home_zone_pincode: Optional[str]
+    home_zone_name: Optional[str]
+    daily_earnings_declared: float
+    upi_id: Optional[str]
+    risk_score: float
+    risk_reasoning: Optional[str]
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

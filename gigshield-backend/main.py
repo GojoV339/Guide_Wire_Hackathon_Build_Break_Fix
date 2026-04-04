@@ -1,26 +1,25 @@
 import os
 
 from dotenv import load_dotenv
+load_dotenv("config.env", override=True) # Load the newly created config file
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import Base
 from database import engine
 from jobs.trigger_monitor import start_scheduler
-from routers.auth import router as auth_router
-from routers.claims import router as claims_router
-from routers.payouts import router as payouts_router
-from routers.policies import router as policies_router
-from routers.workers import router as workers_router
-
-load_dotenv()
-
-ENVIRONMENT = os.getenv("ENVIRONMENT") or "development"
+from routers import analytics
+from routers import auth
+from routers import claims
+from routers import payouts
+from routers import policies
+from routers import workers
 
 app = FastAPI(
     title="GigShield API",
-    version="1.0.0",
-    description="Parametric income insurance for gig workers",
+    version="2.0.0",
+    description="Parametric income insurance for gig delivery workers",
 )
 
 app.add_middleware(
@@ -31,28 +30,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
-app.include_router(workers_router)
-app.include_router(policies_router)
-app.include_router(claims_router)
-app.include_router(payouts_router)
-
-scheduler = None
+app.include_router(auth.router)
+app.include_router(workers.router)
+app.include_router(policies.router)
+app.include_router(claims.router)
+app.include_router(payouts.router)
+app.include_router(analytics.router)
 
 
 @app.on_event("startup")
-def on_startup() -> None:
-    global scheduler
+async def startup():
     Base.metadata.create_all(bind=engine)
-    scheduler = start_scheduler()
+    print("[STARTUP] Database tables created")
+    start_scheduler()
+    print("[STARTUP] GigShield API v2.0 running")
 
 
-@app.get("/", tags=["health"])
-def health() -> dict:
-    """Health check route to verify API is up and show environment."""
+@app.get("/")
+def health_check():
     return {
         "status": "GigShield API is running",
-        "version": "1.0.0",
-        "environment": ENVIRONMENT,
+        "version": "2.0.0",
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "ai_powered": True,
     }
-

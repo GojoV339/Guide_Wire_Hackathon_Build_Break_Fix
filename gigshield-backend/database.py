@@ -1,5 +1,4 @@
 import os
-from typing import Generator
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
@@ -8,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./gigshield.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./gigshield.db")
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
@@ -21,10 +20,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, futu
 Base = declarative_base()
 
 
-def get_db() -> Generator:
+def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-

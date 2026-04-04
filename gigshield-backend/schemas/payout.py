@@ -1,17 +1,17 @@
-import datetime
+from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
-from pydantic import ConfigDict
 
 
 class PayoutResponse(BaseModel):
     id: str
     claim_id: str
     amount: float
-    upi_transaction_id: str | None
+    upi_transaction_id: Optional[str]
     status: str
-    paid_at: datetime.datetime | None
-    created_at: datetime.datetime
+    paid_at: Optional[datetime]
+    created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
-
+    class Config:
+        from_attributes = True

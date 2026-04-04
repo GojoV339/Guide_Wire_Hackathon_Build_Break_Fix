@@ -1,15 +1,9 @@
-import datetime
+import json
 import os
-from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import APIRouter
-from fastapi import Body
 from fastapi import Depends
-from fastapi import Header
 from fastapi import HTTPException
-from fastapi import status
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -17,206 +11,167 @@ from models.claim import Claim
 from models.disruption import DisruptionEvent
 from models.policy import Policy
 from models.worker import Worker
-from schemas.disruption import DisruptionEventResponse
+from schemas.claim import ManualTriggerRequest
 from services.auth_service import get_current_worker
-from services.fraud_service import calculate_fraud_score
-from services.fraud_service import is_claim_auto_approvable
-from services.premium_service import calculate_payout_amount
-from services.payout_service import generate_mock_transaction_id
-from models.payout import Payout
+from services.fraud_service import analyze_claim
+from services.llm_service import calculate_payout_llm
+from services.payout_service import process_payout
 
-load_dotenv()
-
-ENVIRONMENT = os.getenv("ENVIRONMENT") or "development"
-
-router = APIRouter(prefix="/claims", tags=["claims"])
+router = APIRouter(prefix="/claims", tags=["Claims"])
 
 
-@router.get("/my-claims", status_code=status.HTTP_200_OK)
-def my_claims(
-    db: Session = Depends(get_db),
+@router.get("/my-claims")
+def get_my_claims(
     current_worker: Worker = Depends(get_current_worker),
-) -> list[dict[str, Any]]:
-    """Return all claims for the worker's policies, including disruption event details."""
-    try:
-        claims = (
-            db.query(Claim)
-            .join(Policy, Claim.policy_id == Policy.id)
-            .filter(Policy.worker_id == current_worker.id)
-            .order_by(Claim.created_at.desc())
-            .all()
-        )
-        results: list[dict[str, Any]] = []
-        for c in claims:
-            results.append(
-                {
-                    "claim": c,
-                    "event": c.event,
-                    "policy": c.policy,
-                    "payout": c.payout,
-                }
-            )
-        return results
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch claims: {e}")
-
-
-@router.get("/active-disruptions", response_model=list[DisruptionEventResponse], status_code=status.HTTP_200_OK)
-def active_disruptions(
     db: Session = Depends(get_db),
+):
+    """Get all claims for the current worker."""
+    claims = (
+        db.query(Claim)
+        .join(Policy, Claim.policy_id == Policy.id)
+        .filter(Policy.worker_id == current_worker.id)
+        .order_by(Claim.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for c in claims:
+        event = db.query(DisruptionEvent).filter(DisruptionEvent.id == c.event_id).first()
+        result.append(
+            {
+                "id": c.id,
+                "status": c.status,
+                "payout_amount": c.payout_amount,
+                "fraud_score": c.fraud_score,
+                "fraud_reasoning": c.fraud_reasoning,
+                "calculation": c.calculation_explanation,
+                "created_at": str(c.created_at),
+                "event_type": event.event_type if event else None,
+                "event_severity": event.severity_value if event else None,
+            }
+        )
+    return result
+
+
+@router.get("/active-disruptions")
+def get_active_disruptions(
     current_worker: Worker = Depends(get_current_worker),
-) -> list[DisruptionEvent]:
-    """Return all active disruption events for the current worker's active policy pincode."""
-    try:
-        today = datetime.date.today()
-        policy = (
-            db.query(Policy)
-            .filter(
-                and_(
-                    Policy.worker_id == current_worker.id,
-                    Policy.status == "active",
-                    Policy.week_start_date <= today,
-                    Policy.week_end_date >= today,
-                )
-            )
-            .order_by(Policy.created_at.desc())
-            .first()
+    db: Session = Depends(get_db),
+):
+    """Get active disruptions in worker's zone."""
+    policy = (
+        db.query(Policy)
+        .filter(
+            Policy.worker_id == current_worker.id,
+            Policy.status == "active",
         )
-        if not policy:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active policy found")
+        .first()
+    )
 
-        events = (
-            db.query(DisruptionEvent)
-            .filter(and_(DisruptionEvent.zone_pincode == policy.zone_pincode, DisruptionEvent.is_active == True))
-            .order_by(DisruptionEvent.started_at.desc())
-            .all()
+    if not policy:
+        return {"disruptions": [], "message": "No active policy"}
+
+    disruptions = (
+        db.query(DisruptionEvent)
+        .filter(
+            DisruptionEvent.zone_pincode == policy.zone_pincode,
+            DisruptionEvent.is_active == True,
         )
-        return events
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch active disruptions: {e}")
+        .all()
+    )
+
+    return {
+        "zone_pincode": policy.zone_pincode,
+        "zone_name": policy.zone_name,
+        "disruptions": [
+            {
+                "id": d.id,
+                "event_type": d.event_type,
+                "severity_value": d.severity_value,
+                "started_at": str(d.started_at),
+                "api_source": d.api_source,
+            }
+            for d in disruptions
+        ],
+    }
 
 
-@router.post("/manual-trigger", status_code=status.HTTP_201_CREATED)
+@router.post("/manual-trigger")
 def manual_trigger(
-    event_type: str = Body(..., embed=True),
-    pincode: str = Body(..., embed=True),
-    x_env_check: str | None = Header(default=None),
+    request: ManualTriggerRequest,
     db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Development-only: create a mock disruption event and process claims for all active policies in that pincode."""
-    if ENVIRONMENT != "development":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Manual trigger disabled")
+):
+    """Manually trigger a disruption event for testing. Dev mode only."""
+    if os.getenv("ENVIRONMENT") != "development":
+        raise HTTPException(status_code=403, detail="Only available in development")
 
-    try:
-        now = datetime.datetime.utcnow()
-        event = DisruptionEvent(
-            event_type=event_type,
-            zone_pincode=pincode,
-            started_at=now,
-            ended_at=None,
-            severity_value=1.0,
-            api_source="manual_trigger",
-            verified=True,
-            is_active=True,
+    event = DisruptionEvent(
+        event_type=request.event_type,
+        zone_pincode=request.zone_pincode,
+        severity_value=request.severity_value,
+        api_source="manual_test",
+        verified=True,
+        is_active=True,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    print(f"[MANUAL] Created {request.event_type} event in {request.zone_pincode}")
+
+    affected_policies = (
+        db.query(Policy)
+        .filter(
+            Policy.zone_pincode == request.zone_pincode,
+            Policy.status == "active",
         )
-        db.add(event)
+        .all()
+    )
+
+    claims_created = 0
+    for policy in affected_policies:
+        payout_result = calculate_payout_llm(
+            event_type=request.event_type,
+            event_severity=request.severity_value,
+            duration_hours=request.duration_hours,
+            daily_earnings=policy.worker.daily_earnings_declared if policy.worker else 700.0,
+            coverage_remaining=policy.coverage_remaining,
+        )
+
+        fraud_result = analyze_claim(
+            worker_id=policy.worker_id,
+            event_id=event.id,
+            policy_id=policy.id,
+            db=db,
+        )
+
+        claim = Claim(
+            policy_id=policy.id,
+            event_id=event.id,
+            payout_amount=payout_result["final_payout"],
+            fraud_score=fraud_result["trust_score"],
+            fraud_reasoning=fraud_result["reasoning"],
+            fraud_indicators=json.dumps(fraud_result.get("fraud_indicators", [])),
+            status="pending",
+            calculation_explanation=payout_result["calculation_explanation"],
+        )
+        db.add(claim)
         db.commit()
-        db.refresh(event)
+        db.refresh(claim)
 
-        today = datetime.date.today()
-        policies = (
-            db.query(Policy)
-            .filter(
-                and_(
-                    Policy.status == "active",
-                    Policy.zone_pincode == pincode,
-                    Policy.week_start_date <= today,
-                    Policy.week_end_date >= today,
-                )
-            )
-            .all()
-        )
-
-        created = 0
-        for policy in policies:
-            existing = db.query(Claim).filter(and_(Claim.policy_id == policy.id, Claim.event_id == event.id)).first()
-            if existing:
-                continue
-
-            worker = policy.worker
-            duration_hours = 1.0
-            fraud_score = calculate_fraud_score(worker_id=worker.id, event_id=event.id, db=db)
-            payout_amount = calculate_payout_amount(
-                event_type=event.event_type,
-                duration_hours=duration_hours,
-                daily_earnings=worker.daily_earnings_declared,
-                coverage_remaining=policy.coverage_remaining,
-            )
-
-            claim = Claim(
-                policy_id=policy.id,
-                event_id=event.id,
-                payout_amount=float(payout_amount),
-                fraud_score=float(fraud_score),
-                status="pending",
-                created_at=now,
-                updated_at=now,
-            )
-            db.add(claim)
+        if fraud_result["decision"] == "auto_approve":
+            process_payout(claim.id, db)
+            print(f"[MANUAL] Payout Rs{claim.payout_amount} to worker {policy.worker_id}")
+        elif fraud_result["decision"] == "reject":
+            claim.status = "rejected"
             db.commit()
-            db.refresh(claim)
-            created += 1
+        else:
+            claim.status = "under_review"
+            db.commit()
 
-            if is_claim_auto_approvable(fraud_score):
-                claim.status = "approved"
-                payout = Payout(
-                    claim_id=claim.id,
-                    amount=float(payout_amount),
-                    upi_transaction_id=generate_mock_transaction_id(),
-                    status="success",
-                    paid_at=now,
-                    created_at=now,
-                )
-                policy.coverage_remaining = max(0.0, float(policy.coverage_remaining) - float(payout_amount))
-                db.add(payout)
-                db.add(policy)
-                db.add(claim)
-                db.commit()
-            else:
-                claim.status = "under_review"
-                db.add(claim)
-                db.commit()
+        claims_created += 1
 
-        return {"event_id": event.id, "claims_created": created}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Manual trigger failed: {e}")
-
-
-@router.get("/{claim_id}", status_code=status.HTTP_200_OK)
-def get_claim(
-    claim_id: str,
-    db: Session = Depends(get_db),
-    current_worker: Worker = Depends(get_current_worker),
-) -> dict[str, Any]:
-    """Return a single claim with full details and verify it belongs to the current worker."""
-    try:
-        claim = (
-            db.query(Claim)
-            .join(Policy, Claim.policy_id == Policy.id)
-            .filter(and_(Claim.id == claim_id, Policy.worker_id == current_worker.id))
-            .first()
-        )
-        if not claim:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
-        return {"claim": claim, "event": claim.event, "policy": claim.policy, "payout": claim.payout}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch claim: {e}")
-
+    return {
+        "event_id": event.id,
+        "claims_created": claims_created,
+        "message": f"Triggered {request.event_type} in {request.zone_pincode}",
+    }

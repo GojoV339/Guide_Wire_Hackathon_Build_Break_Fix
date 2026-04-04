@@ -1,7 +1,7 @@
-import datetime
+from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
-from pydantic import ConfigDict
 
 
 class ClaimResponse(BaseModel):
@@ -10,19 +10,17 @@ class ClaimResponse(BaseModel):
     event_id: str
     payout_amount: float
     fraud_score: float
+    fraud_reasoning: Optional[str]
     status: str
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
+    calculation_explanation: Optional[str]
+    created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 
-class ClaimSummary(BaseModel):
-    id: str
-    status: str
-    payout_amount: float
-    fraud_score: float
-    created_at: datetime.datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
+class ManualTriggerRequest(BaseModel):
+    event_type: str
+    zone_pincode: str
+    severity_value: float = 30.0
+    duration_hours: float = 2.0

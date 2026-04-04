@@ -1,180 +1,164 @@
-import datetime
-from typing import Any
+import json
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
-from fastapi import status
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.claim import Claim
 from models.policy import Policy
 from models.worker import Worker
-from schemas.policy import PolicyResponse
+from schemas.policy import PolicyCreateRequest
 from services.auth_service import get_current_worker
+from services.premium_service import calculate_premium
 from services.premium_service import calculate_risk_score
-from services.premium_service import calculate_weekly_premium
-from utils.helpers import get_monday_sunday_for_date
-from utils.helpers import get_month_bounds_for_date
+from services.premium_service import get_prior_claims_count
+from services.premium_service import get_week_dates
 
-router = APIRouter(prefix="/policies", tags=["policies"])
+router = APIRouter(prefix="/policies", tags=["Policies"])
 
 
-@router.post("/create", status_code=status.HTTP_201_CREATED)
+@router.get("/premium-quote")
+def get_premium_quote(
+    zone_pincode: str,
+    zone_name: str = "",
+    current_worker: Worker = Depends(get_current_worker),
+    db: Session = Depends(get_db),
+):
+    """Get premium quote without creating a policy."""
+    risk_result = calculate_risk_score(zone_pincode, zone_name or zone_pincode, db)
+    prior_claims = get_prior_claims_count(current_worker.id, db)
+    premium = calculate_premium(
+        current_worker.daily_earnings_declared,
+        risk_result["risk_score"],
+        prior_claims,
+    )
+    return {
+        **premium,
+        "risk_score": risk_result["risk_score"],
+        "risk_category": risk_result.get("risk_category", "medium"),
+        "risk_reasoning": risk_result["reasoning"],
+    }
+
+
+@router.post("/create")
 def create_policy(
-    db: Session = Depends(get_db),
+    request: PolicyCreateRequest,
     current_worker: Worker = Depends(get_current_worker),
-) -> dict[str, Any]:
-    """Create a new weekly policy for the authenticated worker if none exists for current week."""
-    try:
-        today = datetime.date.today()
-        week_start, week_end = get_monday_sunday_for_date(today)
-
-        existing = (
-            db.query(Policy)
-            .filter(
-                and_(
-                    Policy.worker_id == current_worker.id,
-                    Policy.status == "active",
-                    Policy.week_start_date == week_start,
-                    Policy.week_end_date == week_end,
-                )
-            )
-            .first()
-        )
-        if existing:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Worker already has active policy")
-
-        risk_score = float(calculate_risk_score(current_worker.home_zone_pincode, db))
-
-        month_start, month_end = get_month_bounds_for_date(today)
-        prior_claims = (
-            db.query(Claim)
-            .join(Policy, Claim.policy_id == Policy.id)
-            .filter(
-                and_(
-                    Policy.worker_id == current_worker.id,
-                    Claim.created_at >= month_start,
-                    Claim.created_at <= month_end,
-                )
-            )
-            .count()
-        )
-
-        breakdown = calculate_weekly_premium(
-            daily_earnings=float(current_worker.daily_earnings_declared),
-            risk_score=risk_score,
-            prior_claims_this_month=int(prior_claims),
-        )
-
-        policy = Policy(
-            worker_id=current_worker.id,
-            week_start_date=week_start,
-            week_end_date=week_end,
-            premium_paid=float(breakdown["total_premium"]),
-            max_coverage_amount=float(breakdown["max_coverage"]),
-            coverage_remaining=float(breakdown["max_coverage"]),
-            status="active",
-            zone_pincode=current_worker.home_zone_pincode,
-        )
-
-        current_worker.risk_score = risk_score
-        db.add(current_worker)
-        db.add(policy)
-        db.commit()
-        db.refresh(policy)
-
-        return {"policy": policy, "premium_breakdown": breakdown}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create policy: {e}")
-
-
-@router.get("/current", response_model=PolicyResponse, status_code=status.HTTP_200_OK)
-def current_policy(
     db: Session = Depends(get_db),
-    current_worker: Worker = Depends(get_current_worker),
-) -> Policy:
-    """Return the worker's current active policy for this week or 404 if none."""
-    try:
-        today = datetime.date.today()
-        policy = (
-            db.query(Policy)
-            .filter(
-                and_(
-                    Policy.worker_id == current_worker.id,
-                    Policy.status == "active",
-                    Policy.week_start_date <= today,
-                    Policy.week_end_date >= today,
-                )
-            )
-            .order_by(Policy.created_at.desc())
-            .first()
+):
+    """Create a new weekly policy for the worker."""
+    monday, sunday = get_week_dates()
+    existing = (
+        db.query(Policy)
+        .filter(
+            Policy.worker_id == current_worker.id,
+            Policy.status == "active",
+            Policy.week_start_date == monday,
         )
-        if not policy:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active policy found")
-        return policy
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to get current policy: {e}")
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have an active policy this week")
+
+    risk_result = calculate_risk_score(
+        request.zone_pincode,
+        request.zone_name or request.zone_pincode,
+        db,
+    )
+
+    current_worker.risk_score = risk_result["risk_score"]
+    current_worker.risk_reasoning = risk_result["reasoning"]
+
+    prior_claims = get_prior_claims_count(current_worker.id, db)
+    premium = calculate_premium(
+        current_worker.daily_earnings_declared,
+        risk_result["risk_score"],
+        prior_claims,
+    )
+
+    policy = Policy(
+        worker_id=current_worker.id,
+        week_start_date=monday,
+        week_end_date=sunday,
+        premium_paid=premium["total_premium"],
+        max_coverage_amount=premium["max_coverage"],
+        coverage_remaining=premium["max_coverage"],
+        status="active",
+        zone_pincode=request.zone_pincode,
+        zone_name=request.zone_name,
+        premium_breakdown=json.dumps(premium),
+    )
+    db.add(policy)
+    db.add(current_worker)
+    db.commit()
+    db.refresh(policy)
+
+    return {
+        "message": "Policy created successfully",
+        "policy_id": policy.id,
+        "premium_paid": policy.premium_paid,
+        "max_coverage": policy.max_coverage_amount,
+        "week_start": str(policy.week_start_date),
+        "week_end": str(policy.week_end_date),
+        "risk_score": risk_result["risk_score"],
+        "risk_reasoning": risk_result["reasoning"],
+        "premium_breakdown": premium,
+    }
 
 
-@router.get("/history", response_model=list[PolicyResponse], status_code=status.HTTP_200_OK)
-def policy_history(
+@router.get("/current")
+def get_current_policy(
+    current_worker: Worker = Depends(get_current_worker),
     db: Session = Depends(get_db),
-    current_worker: Worker = Depends(get_current_worker),
-) -> list[Policy]:
-    """Return all policies for the authenticated worker ordered by newest first."""
-    try:
-        policies = (
-            db.query(Policy)
-            .filter(Policy.worker_id == current_worker.id)
-            .order_by(Policy.created_at.desc())
-            .all()
+):
+    """Get worker's current active policy."""
+    policy = (
+        db.query(Policy)
+        .filter(
+            Policy.worker_id == current_worker.id,
+            Policy.status == "active",
         )
-        return policies
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to get policy history: {e}")
+        .first()
+    )
+    if not policy:
+        raise HTTPException(status_code=404, detail="No active policy found")
+    return {
+        "id": policy.id,
+        "week_start_date": str(policy.week_start_date),
+        "week_end_date": str(policy.week_end_date),
+        "premium_paid": policy.premium_paid,
+        "max_coverage_amount": policy.max_coverage_amount,
+        "coverage_remaining": policy.coverage_remaining,
+        "status": policy.status,
+        "zone_pincode": policy.zone_pincode,
+        "zone_name": policy.zone_name,
+    }
 
 
-@router.get("/premium-quote", status_code=status.HTTP_200_OK)
-def premium_quote(
+@router.get("/history")
+def get_policy_history(
+    current_worker: Worker = Depends(get_current_worker),
     db: Session = Depends(get_db),
-    current_worker: Worker = Depends(get_current_worker),
-) -> dict[str, Any]:
-    """Return a premium quote breakdown without creating a policy."""
-    try:
-        today = datetime.date.today()
-        risk_score = float(calculate_risk_score(current_worker.home_zone_pincode, db))
-
-        month_start, month_end = get_month_bounds_for_date(today)
-        prior_claims = (
-            db.query(Claim)
-            .join(Policy, Claim.policy_id == Policy.id)
-            .filter(
-                and_(
-                    Policy.worker_id == current_worker.id,
-                    Claim.created_at >= month_start,
-                    Claim.created_at <= month_end,
-                )
-            )
-            .count()
-        )
-
-        breakdown = calculate_weekly_premium(
-            daily_earnings=float(current_worker.daily_earnings_declared),
-            risk_score=risk_score,
-            prior_claims_this_month=int(prior_claims),
-        )
-        return {"premium_breakdown": breakdown}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to get premium quote: {e}")
-
+):
+    """Get all policies for the worker."""
+    policies = (
+        db.query(Policy)
+        .filter(Policy.worker_id == current_worker.id)
+        .order_by(Policy.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": p.id,
+            "week_start": str(p.week_start_date),
+            "week_end": str(p.week_end_date),
+            "premium_paid": p.premium_paid,
+            "max_coverage": p.max_coverage_amount,
+            "coverage_remaining": p.coverage_remaining,
+            "status": p.status,
+            "zone_pincode": p.zone_pincode,
+        }
+        for p in policies
+    ]

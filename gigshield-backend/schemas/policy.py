@@ -1,40 +1,38 @@
-import datetime
+from datetime import date
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
-from pydantic import ConfigDict
 
 
-class PolicyCreate(BaseModel):
-    worker_id: str
+class PolicyCreateRequest(BaseModel):
     zone_pincode: str
+    zone_name: Optional[str] = None
+
+
+class PremiumQuoteResponse(BaseModel):
+    base_premium: float
+    earnings_linked: float
+    zone_risk_loading: float
+    claims_surcharge: float
+    total_premium: float
+    max_coverage: float
+    risk_score: float
+    risk_reasoning: Optional[str]
 
 
 class PolicyResponse(BaseModel):
     id: str
     worker_id: str
-    week_start_date: datetime.date
-    week_end_date: datetime.date
+    week_start_date: date
+    week_end_date: date
     premium_paid: float
     max_coverage_amount: float
     coverage_remaining: float
     status: str
     zone_pincode: str
-    created_at: datetime.datetime
+    zone_name: Optional[str]
+    created_at: datetime
 
-    premium_breakdown: Optional[dict] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class PolicySummary(BaseModel):
-    id: str
-    status: str
-    week_start_date: datetime.date
-    week_end_date: datetime.date
-    premium_paid: float
-    max_coverage_amount: float
-    coverage_remaining: float
-
-    model_config = ConfigDict(from_attributes=True)
-
+    class Config:
+        from_attributes = True

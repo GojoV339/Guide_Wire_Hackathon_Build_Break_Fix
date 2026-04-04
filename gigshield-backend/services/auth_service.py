@@ -2,13 +2,12 @@ import os
 import random
 from datetime import datetime
 from datetime import timedelta
-from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import Depends
 from fastapi import HTTPException
-from fastapi import status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer
 from jose import JWTError
 from jose import jwt
 from sqlalchemy.orm import Session
@@ -18,48 +17,38 @@ from models.worker import Worker
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY") or "change-me"
-ALGORITHM = os.getenv("ALGORITHM") or "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "10080")
+SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 10080))
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify-otp")
+security = HTTPBearer()
 
 
 def generate_otp() -> str:
-    otp = str(random.randint(1000, 9999))
-    return otp
+    """Generate a 4-digit OTP."""
+    return str(random.randint(1000, 9999))
 
 
-def create_access_token(data: dict) -> str:
-    to_encode = dict(data)
+def create_access_token(worker_id: str) -> str:
+    """Create JWT access token for a worker."""
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-
-def verify_token(token: str) -> dict[str, Any]:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-        )
+    data = {"sub": worker_id, "exp": expire}
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def get_current_worker(
-    token: str = Depends(oauth2_scheme),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ) -> Worker:
-    payload = verify_token(token)
-    worker_id = payload.get("worker_id")
-    if not worker_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
-    worker = db.query(Worker).filter(Worker.id == worker_id).first()
-    if not worker:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Worker not found")
-    return worker
-
+    """Get current worker from JWT token."""
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        worker_id = payload.get("sub")
+        if not worker_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        worker = db.query(Worker).filter(Worker.id == worker_id).first()
+        if not worker:
+            raise HTTPException(status_code=401, detail="Worker not found")
+        return worker
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")

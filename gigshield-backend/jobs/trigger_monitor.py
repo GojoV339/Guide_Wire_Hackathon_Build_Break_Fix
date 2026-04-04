@@ -1,4 +1,6 @@
-import datetime
+import json
+from datetime import datetime
+from datetime import timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import and_
@@ -7,173 +9,121 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models.claim import Claim
 from models.disruption import DisruptionEvent
-from models.payout import Payout
 from models.policy import Policy
-from services.fraud_service import calculate_fraud_score
-from services.fraud_service import is_claim_auto_approvable
-from services.payout_service import generate_mock_transaction_id
-from services.premium_service import calculate_payout_amount
-from services.trigger_service import run_all_triggers_for_pincode
+from services.fraud_service import analyze_claim
+from services.llm_service import calculate_payout_llm
+from services.payout_service import process_payout
+from services.trigger_service import run_all_triggers
 
 
-def process_triggers(db: Session) -> None:
-    print("[GigShield TriggerMonitor] Running trigger scan...")
-
-    today = datetime.date.today()
-    active_policies = (
-        db.query(Policy)
-        .filter(
-            and_(
-                Policy.status == "active",
-                Policy.week_start_date <= today,
-                Policy.week_end_date >= today,
-            )
-        )
-        .all()
-    )
-    pincodes = sorted({p.zone_pincode for p in active_policies})
-    print(f"[GigShield TriggerMonitor] Active pincodes: {pincodes}")
-
-    for pincode in pincodes:
-        triggers = run_all_triggers_for_pincode(pincode)
-        if triggers:
-            print(f"[GigShield TriggerMonitor] Triggers fired for {pincode}: {triggers}")
-        for trigger in triggers:
-            now = datetime.datetime.utcnow()
-            cutoff = now - datetime.timedelta(hours=2)
-            existing = (
-                db.query(DisruptionEvent)
-                .filter(
-                    and_(
-                        DisruptionEvent.zone_pincode == pincode,
-                        DisruptionEvent.event_type == trigger["event_type"],
-                        DisruptionEvent.started_at >= cutoff,
-                    )
-                )
-                .order_by(DisruptionEvent.started_at.desc())
-                .first()
-            )
-
-            event = existing
-            if not event:
-                event = DisruptionEvent(
-                    event_type=trigger["event_type"],
-                    zone_pincode=pincode,
-                    started_at=now,
-                    ended_at=None,
-                    severity_value=float(trigger["severity_value"]),
-                    api_source=str(trigger["api_source"]),
-                    verified=True,
-                    is_active=True,
-                )
-                db.add(event)
-                db.commit()
-                db.refresh(event)
-                print(
-                    f"[GigShield TriggerMonitor] Created disruption event {event.id} "
-                    f"type={event.event_type} pincode={event.zone_pincode}"
-                )
-
-            zone_policies = (
-                db.query(Policy)
-                .filter(
-                    and_(
-                        Policy.status == "active",
-                        Policy.zone_pincode == pincode,
-                        Policy.week_start_date <= today,
-                        Policy.week_end_date >= today,
-                    )
-                )
-                .all()
-            )
-
-            for policy in zone_policies:
-                existing_claim = (
-                    db.query(Claim)
-                    .filter(and_(Claim.policy_id == policy.id, Claim.event_id == event.id))
-                    .first()
-                )
-                if existing_claim:
-                    continue
-
-                duration_hours = max(
-                    0.0,
-                    (now - event.started_at).total_seconds() / 3600.0,
-                )
-
-                worker = policy.worker
-                if not worker:
-                    continue
-
-                fraud_score = calculate_fraud_score(worker_id=worker.id, event_id=event.id, db=db)
-                payout_amount = calculate_payout_amount(
-                    event_type=event.event_type,
-                    duration_hours=duration_hours,
-                    daily_earnings=worker.daily_earnings_declared,
-                    coverage_remaining=policy.coverage_remaining,
-                )
-
-                claim = Claim(
-                    policy_id=policy.id,
-                    event_id=event.id,
-                    payout_amount=float(payout_amount),
-                    fraud_score=float(fraud_score),
-                    status="pending",
-                    created_at=now,
-                    updated_at=now,
-                )
-                db.add(claim)
-                db.commit()
-                db.refresh(claim)
-
-                if is_claim_auto_approvable(fraud_score):
-                    claim.status = "approved"
-
-                    payout = Payout(
-                        claim_id=claim.id,
-                        amount=float(payout_amount),
-                        upi_transaction_id=generate_mock_transaction_id(),
-                        status="success",
-                        paid_at=now,
-                        created_at=now,
-                    )
-                    db.add(payout)
-
-                    policy.coverage_remaining = max(0.0, float(policy.coverage_remaining) - float(payout_amount))
-                    db.add(policy)
-                    db.add(claim)
-                    db.commit()
-                    print(
-                        f"[GigShield TriggerMonitor] Auto-approved claim {claim.id} payout={payout_amount} "
-                        f"fraud_score={fraud_score:.2f}"
-                    )
-                else:
-                    claim.status = "under_review"
-                    db.add(claim)
-                    db.commit()
-                    print(
-                        f"[GigShield TriggerMonitor] Claim {claim.id} under review fraud_score={fraud_score:.2f}"
-                    )
-
-
-def _job_wrapper() -> None:
+def process_triggers():
+    """Main job that runs every 15 minutes to check for disruptions."""
+    print(f"\n[MONITOR] Running trigger check at {datetime.utcnow()}")
     db = SessionLocal()
     try:
-        process_triggers(db)
+        active_policies = db.query(Policy).filter(Policy.status == "active").all()
+
+        pincodes = list(set(p.zone_pincode for p in active_policies))
+        print(f"[MONITOR] Checking {len(pincodes)} zones: {pincodes}")
+
+        for pincode in pincodes:
+            triggers = run_all_triggers(pincode)
+            for trigger_data in triggers:
+                two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+                existing = (
+                    db.query(DisruptionEvent)
+                    .filter(
+                        and_(
+                            DisruptionEvent.zone_pincode == pincode,
+                            DisruptionEvent.event_type == trigger_data["event_type"],
+                            DisruptionEvent.created_at >= two_hours_ago,
+                            DisruptionEvent.is_active == True,
+                        )
+                    )
+                    .first()
+                )
+
+                if not existing:
+                    event = DisruptionEvent(
+                        event_type=trigger_data["event_type"],
+                        zone_pincode=pincode,
+                        severity_value=trigger_data["severity_value"],
+                        api_source=trigger_data["api_source"],
+                        verified=True,
+                        is_active=True,
+                    )
+                    db.add(event)
+                    db.commit()
+                    db.refresh(event)
+                    print(f"[MONITOR] New event: {event.event_type} in {pincode}")
+
+                    zone_policies = [p for p in active_policies if p.zone_pincode == pincode]
+
+                    for policy in zone_policies:
+                        existing_claim = (
+                            db.query(Claim)
+                            .filter(and_(Claim.policy_id == policy.id, Claim.event_id == event.id))
+                            .first()
+                        )
+
+                        if existing_claim:
+                            continue
+
+                        duration = 2.0
+                        w = policy.worker
+                        daily_earnings = w.daily_earnings_declared if w else 700.0
+                        payout_result = calculate_payout_llm(
+                            event_type=event.event_type,
+                            event_severity=event.severity_value,
+                            duration_hours=duration,
+                            daily_earnings=daily_earnings,
+                            coverage_remaining=policy.coverage_remaining,
+                        )
+
+                        fraud_result = analyze_claim(
+                            worker_id=policy.worker_id,
+                            event_id=event.id,
+                            policy_id=policy.id,
+                            db=db,
+                        )
+
+                        claim = Claim(
+                            policy_id=policy.id,
+                            event_id=event.id,
+                            payout_amount=payout_result["final_payout"],
+                            fraud_score=fraud_result["trust_score"],
+                            fraud_reasoning=fraud_result["reasoning"],
+                            fraud_indicators=json.dumps(fraud_result.get("fraud_indicators", [])),
+                            status="pending",
+                            calculation_explanation=payout_result["calculation_explanation"],
+                        )
+                        db.add(claim)
+                        db.commit()
+                        db.refresh(claim)
+
+                        if fraud_result["decision"] == "auto_approve":
+                            process_payout(claim.id, db)
+                            print(f"[MONITOR] Auto-approved Rs{claim.payout_amount} for worker {policy.worker_id}")
+                        elif fraud_result["decision"] == "reject":
+                            claim.status = "rejected"
+                            db.commit()
+                            print(f"[MONITOR] Rejected claim for worker {policy.worker_id}")
+                        else:
+                            claim.status = "under_review"
+                            db.commit()
+                            print(f"[MONITOR] Manual review needed for worker {policy.worker_id}")
+
     except Exception as e:
-        print(f"[GigShield TriggerMonitor] Job error: {e}")
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        print(f"[MONITOR ERROR] {e}")
+        db.rollback()
     finally:
         db.close()
 
 
-def start_scheduler() -> BackgroundScheduler:
+def start_scheduler():
+    """Start the background scheduler."""
     scheduler = BackgroundScheduler()
-    scheduler.add_job(_job_wrapper, "interval", minutes=15, id="gigshield_trigger_monitor")
+    scheduler.add_job(process_triggers, "interval", minutes=15, id="trigger_monitor")
     scheduler.start()
-    print("[GigShield TriggerMonitor] Scheduler started (every 15 minutes).")
+    print("[SCHEDULER] Trigger monitor started. Runs every 15 minutes.")
     return scheduler
-
