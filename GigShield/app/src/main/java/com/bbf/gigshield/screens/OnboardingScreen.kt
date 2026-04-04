@@ -1,69 +1,97 @@
 package com.bbf.gigshield.screens
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import android.widget.Toast
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.navigation.NavHostController
-import com.bbf.gigshield.ui.theme.GigShieldGreen
-import com.bbf.gigshield.ui.theme.GigShieldGray
+import androidx.navigation.NavController
+import com.bbf.gigshield.network.ApiClient
+import com.bbf.gigshield.network.OtpRequestDto
+import com.bbf.gigshield.network.OtpVerifyDto
+import com.bbf.gigshield.data.TokenStore
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnboardingScreen(navController: NavHostController) {
-
+fun OnboardingScreen(navController: NavController) {
     var step by remember { mutableStateOf(1) }
     var phone by remember { mutableStateOf("") }
+    var platform by remember { mutableStateOf("Zepto") }
+    var platformId by remember { mutableStateOf("") }
     var otp by remember { mutableStateOf("") }
-    var showError by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var devOtpHint by remember { mutableStateOf<String?>(null) }
+    var expanded by remember { mutableStateOf(false) }
+    
+    val platforms = listOf("Zepto", "Blinkit", "Instamart", "Swiggy", "Zomato")
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Spacer(modifier = Modifier.height(60.dp))
-
-        Text(
-            text = "GigShield",
-            fontSize = 36.sp,
-            fontWeight = FontWeight.Bold,
-            color = GigShieldGreen
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Income protection for delivery workers",
-            fontSize = 14.sp,
-            color = GigShieldGray,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(48.dp))
-
         if (step == 1) {
+            Text(
+                text = "GigShield",
+                color = Color(0xFF1B5E20),
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Income protection for delivery workers",
+                color = Color.Gray,
+                fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.height(40.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = platform,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Delivery Platform") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    platforms.forEach { selectionOption ->
+                        DropdownMenuItem(
+                            text = { Text(selectionOption) },
+                            onClick = {
+                                platform = selectionOption
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             OutlinedTextField(
                 value = phone,
                 onValueChange = { if (it.length <= 10) phone = it },
@@ -72,70 +100,71 @@ fun OnboardingScreen(navController: NavHostController) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            
+            Spacer(modifier = Modifier.height(24.dp))
+            
             Button(
-                onClick = { if (phone.length == 10) step = 2 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = GigShieldGreen)
+                onClick = {
+                    if (phone.length < 10) {
+                        Toast.makeText(context, "Enter 10-digit phone", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    scope.launch {
+                        loading = true
+                        try {
+                            val response = ApiClient.getAuthApi(context).sendOtp(OtpRequestDto(phone))
+                            if (response.isSuccessful) {
+                                devOtpHint = "Dev OTP: ${response.body()?.otp}"
+                                step = 2
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Server offline", Toast.LENGTH_SHORT).show()
+                        } finally {
+                            loading = false
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                enabled = !loading,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
             ) {
-                Text("Send OTP", fontSize = 16.sp)
+                if (loading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                else Text("Send OTP")
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "By continuing you agree to our Terms and Privacy Policy",
-                fontSize = 12.sp,
-                color = GigShieldGray,
-                textAlign = TextAlign.Center
-            )
         } else {
-            Text(
-                text = "OTP sent to +91 $phone",
-                fontSize = 14.sp,
-                color = GigShieldGray,
-                textAlign = TextAlign.Center
-            )
+            Text(text = "OTP sent to +91 $phone", fontSize = 16.sp)
+            devOtpHint?.let { Text(text = it, color = Color.Gray, fontSize = 12.sp) }
             Spacer(modifier = Modifier.height(24.dp))
             OutlinedTextField(
                 value = otp,
-                onValueChange = { if (it.length <= 4) otp = it },
+                onValueChange = { otp = it },
                 label = { Text("Enter OTP") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            if (showError) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Incorrect OTP. Please try 1234",
-                    color = Color.Red,
-                    fontSize = 12.sp
-                )
-            }
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
-                    if (otp == "1234") {
-                        navController.navigate("buy_policy") {
-                            popUpTo("onboarding") { inclusive = true }
-                        }
-                    } else {
-                        showError = true
+                    scope.launch {
+                        loading = true
+                        try {
+                            val response = ApiClient.getAuthApi(context).verifyOtp(OtpVerifyDto(phone, otp))
+                            if (response.isSuccessful && response.body() != null) {
+                                TokenStore.saveAccessToken(context, response.body()!!.accessToken)
+                                navController.navigate("complete_profile") {
+                                    popUpTo("onboarding") { inclusive = true }
+                                }
+                            }
+                        } catch (e: Exception) { } finally { loading = false }
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = GigShieldGreen)
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                enabled = !loading,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
             ) {
-                Text("Verify OTP", fontSize = 16.sp)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            TextButton(onClick = { }) {
-                Text("Resend OTP", color = GigShieldGreen)
+                if (loading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                else Text("Verify OTP")
             }
         }
     }
 }
-

@@ -4,11 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import com.bbf.gigshield.screens.BuyPolicyScreen
-import com.bbf.gigshield.screens.LiveCoverageScreen
-import com.bbf.gigshield.screens.OnboardingScreen
-import com.bbf.gigshield.screens.PayoutScreen
-import com.bbf.gigshield.screens.SplashScreen
+import com.bbf.gigshield.screens.*
 
 @Composable
 fun NavGraph(navController: NavHostController) {
@@ -16,20 +12,11 @@ fun NavGraph(navController: NavHostController) {
         navController = navController,
         startDestination = "splash"
     ) {
-        composable("splash") {
-            SplashScreen(navController = navController)
-        }
-        composable("onboarding") {
-            OnboardingScreen(navController = navController)
-        }
-        composable("buy_policy") {
-            BuyPolicyScreen(navController = navController)
-        }
-        composable("live_coverage") {
-            LiveCoverageScreen(navController = navController)
-        }
-        composable("payout") {
-            PayoutScreen(navController = navController)
-        }
+        composable("splash") { SplashScreen(navController) }
+        composable("onboarding") { OnboardingScreen(navController) }
+        composable("complete_profile") { CompleteProfileScreen(navController) }
+        composable("buy_policy") { BuyPolicyScreen(navController) }
+        composable("live_coverage") { LiveCoverageScreen(navController) }
+        composable("payout") { PayoutScreen(navController) }
     }
 }

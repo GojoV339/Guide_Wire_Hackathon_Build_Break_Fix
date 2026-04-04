@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Backend secrets — never commit
+gigshield-backend/.env

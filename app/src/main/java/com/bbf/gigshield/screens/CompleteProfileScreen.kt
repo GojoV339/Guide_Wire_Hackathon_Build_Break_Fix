@@ -26,6 +26,7 @@ fun CompleteProfileScreen(navController: NavController) {
     var pincode by remember { mutableStateOf("") }
     var dailyEarnings by remember { mutableStateOf("") }
     var upiId by remember { mutableStateOf("") }
+    var partnerId by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var showError by remember { mutableStateOf(false) }
 
@@ -52,7 +53,7 @@ fun CompleteProfileScreen(navController: NavController) {
                 color = Color(0xFF1B5E20)
             )
             Text(
-                text = "We use your location and earnings to build a custom AI risk model for you.",
+                text = "We use your location and platform data to build your AI risk model.",
                 fontSize = 14.sp,
                 color = Color.Gray,
                 modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
@@ -62,6 +63,14 @@ fun CompleteProfileScreen(navController: NavController) {
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Full Name") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = partnerId,
+                onValueChange = { partnerId = it },
+                label = { Text("Delivery Partner ID (Zepto/Blinkit/etc)") },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(16.dp))
@@ -84,6 +93,7 @@ fun CompleteProfileScreen(navController: NavController) {
             )
             Spacer(modifier = Modifier.height(16.dp))
 
+            // UPI ID field
             OutlinedTextField(
                 value = upiId,
                 onValueChange = { upiId = it },
@@ -96,7 +106,7 @@ fun CompleteProfileScreen(navController: NavController) {
 
             Button(
                 onClick = {
-                    if (name.isBlank() || pincode.length != 6 || dailyEarnings.isBlank()) {
+                    if (name.isBlank() || pincode.length != 6 || dailyEarnings.isBlank() || partnerId.isBlank()) {
                         showError = true
                         return@Button
                     }
@@ -105,11 +115,12 @@ fun CompleteProfileScreen(navController: NavController) {
                         try {
                             val profile = WorkerProfileUpdateDto(
                                 name = name,
-                                home_zone_pincode = pincode,
-                                daily_earnings_declared = dailyEarnings.toDoubleOrNull() ?: 0.0,
-                                upi_id = upiId
+                                homeZonePincode = pincode,
+                                dailyEarningsDeclared = dailyEarnings.toDoubleOrNull() ?: 0.0,
+                                upiId = upiId,
+                                platformPartnerId = partnerId
                             )
-                            val response = ApiClient.authApi.updateProfile(profile)
+                            val response = ApiClient.getAuthApi(context).updateProfile(profile)
                             if (response.isSuccessful) {
                                 navController.navigate("buy_policy") {
                                     popUpTo("complete_profile") { inclusive = true }

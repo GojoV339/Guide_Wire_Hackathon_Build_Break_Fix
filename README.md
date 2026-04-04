@@ -525,18 +525,38 @@ Three forward-looking predictions for the coming week:
 ### Phase 2 — Weeks 3–4: Automate & Protect (Mar 21–Apr 4)
 
 **Week 3**
-- [ ] Build worker registration and OTP login flow
-- [ ] Build policy creation API with weekly pricing logic
-- [ ] Connect OpenWeatherMap and AQICN APIs to trigger monitor
-- [ ] Implement 3 of 5 parametric triggers — rain, AQI, heat
+- [x] Build worker registration and OTP login flow
+- [x] Build policy creation API with weekly pricing logic
+- [x] Connect OpenWeatherMap and AQICN APIs to trigger monitor
+- [x] Implement 3 of 5 parametric triggers — rain, AQI, heat
 
 **Week 4**
-- [ ] Implement remaining 2 triggers — curfew mock, app outage mock
-- [ ] Build basic Isolation Forest fraud model
-- [ ] Build claims processor with auto-approve / manual queue routing
-- [ ] Build Android worker app (Kotlin + Jetpack Compose) — all 4 screens
+- [x] Implement remaining 2 triggers — curfew mock, app outage mock
+- [x] Build basic Isolation Forest fraud model (and LLM Verification)
+- [x] Build claims processor with auto-approve / manual queue routing
+- [x] Build Android worker app (Kotlin + Jetpack Compose) — all 4 screens
 - [ ] Record 2-minute demo video
-- [ ] Deliverable: Working registration → policy → claim flow
+- [x] Deliverable: Working registration → policy → claim flow
+
+---
+
+## 🚀 How to Demo Phase 2 (Zero-Touch Claims Workflow)
+
+The backend natively polls public APIs (Weather/AQI) every 15 minutes looking for disruptions. For the 2-minute hackathon demo video, you do not need to wait 15 minutes. A `Fast Forward` API has been deployed.
+
+**To trigger an instant disruption:**
+Run the following curl command in a fresh terminal window while your Android emulator sits on the `Live Coverage` screen.
+
+```bash
+curl -X POST "http://0.0.0.0:8000/analytics/demo/force-trigger"
+```
+
+**What happens next:**
+1. The backend triggers a simulated `Platform Outage` event.
+2. The ML model (`services/llm_service.py`) calculates the severity and limits.
+3. The Fraud model skips manual intervention due to a high Trust Score.
+4. The database instantly maps an automated payout to the worker's open policy.
+5. You can visually refresh the `Live Coverage` dashboard in Android and see it morph instantly into **Red Alert**, declaring the outage and showing the active payout logic on screen.
 
 ---
 
