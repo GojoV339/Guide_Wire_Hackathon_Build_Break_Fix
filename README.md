@@ -216,8 +216,6 @@ No manual reporting required from the worker at any point.
 
 ## Layer 3 — The Backend Services
 
-![Layer3](images/Layer3.png)
-
 1. **Auth service:** When Ravi opens the app, this service handles his login. It
    sends an OTP to his phone, verifies it, and gives him a JWT token — a digital
    key that proves he's logged in. Every request he makes after that carries this
@@ -229,16 +227,15 @@ No manual reporting required from the worker at any point.
    is covered from Monday 12am to Sunday 11:59pm for ₹4,200 in his zone. It stores
    all coverage rules — what disruptions count, for how long, and how much he gets
    per hour lost.
-4. **Pricing service:** This service calls the AI risk model, passes it Ravi's zone
-   data, earnings, and history, and gets back a ₹ number — his personal weekly
+4. **Pricing service:** This service calls the Groq LLM API, passes it Ravi's zone
+   data, earnings, and history, and gets back a risk score — his personal weekly
    premium. It's called fresh every Monday so the price adjusts as risk changes
    seasonally.
 5. **Trigger monitor:** This runs as a background job every 15 minutes. It calls
    weather APIs, AQI APIs, and civic alert feeds. For each zone where workers have
    active policies, it checks: has any threshold been crossed? If yes, it fires a
    claim event into the queue.
-6. **Claims processor:** Receives trigger events from the queue, runs the fraud
-   model, calculates payout amount, and either approves the claim automatically or
+6. **Claims processor:** Receives trigger events from the queue, runs the LLM fraud analysis prompt, calculates payout amount natively via LLM, and either approves the claim automatically or
    sends it to the manual review queue.
 7. **Notification service:** Sends push notifications via FCM, SMS via Twilio, and
    in-app messages. Supporting service — communicates decisions, does not make them.
@@ -250,11 +247,9 @@ No manual reporting required from the worker at any point.
 
 ---
 
-## Layer 4 — The AI/ML Brain
+## Layer 4 — The LLM Intelligence Layer
 
-![Layer4](images/Layer4.png)
-
-### Model 1 — Risk Profiler (XGBoost Classifier)
+### Model 1 — Risk Profiler (Groq LLaMA-3.3-70B)
 
 **Purpose:** Compute a risk score (1–10) per worker per zone, used to set the
 weekly premium.
@@ -268,11 +263,10 @@ weekly premium.
 
 **Output:** Risk score 1–10. Score of 2 = calm zone, low premium.
 Score of 9 = flood-prone, politically active zone in monsoon, high premium.
-Retrained every Monday using the prior week's claims and weather data.
 
 ---
 
-### Model 2 — Fraud Detector (Isolation Forest)
+### Model 2 — Fraud Detector (Groq LLaMA-3.3-70B)
 
 **Purpose:** Assign a trust score (0–1) to every claim event. Scores above 0.85
 are auto-approved. Below 0.85 go to manual review.
@@ -288,11 +282,11 @@ are auto-approved. Below 0.85 go to manual review.
 
 ---
 
-### Model 3 — Payout Calculator (Rule Engine + Regression)
+### Model 3 — Payout Calculator (Groq LLaMA-3.3-70B)
 
 **Purpose:** Calculate the exact ₹ amount to transfer.
 
-**Formula:**
+**Formula Context:**
 ```
 Payout = Event duration (hrs)
        × Worker's hourly rate (daily earnings ÷ 8)
@@ -300,16 +294,14 @@ Payout = Event duration (hrs)
        × Min(1, coverage remaining ÷ calculated amount)
 ```
 
-**Output:** Exact rupee amount, capped by remaining weekly coverage balance.
+**Output:** Exact rupee amount, capped by remaining weekly coverage balance synthesized through JSON extraction from the prompt format.
 
-> **Note:** These three models are the foundation. Additional models and features
+> **Note:** These three models rely heavily on precise Prompt Engineering. More context signals
 > will be added in Phases 2 and 3 as the system matures.
 
 ---
 
 ## Layer 5 — End-to-End Claim Flow
-
-![Layer5](images/Layer5.png)
 
 1. **Trigger monitor wakes up** (every 15 min) — proactively calls OpenWeatherMap,
    AQICN, and civic alert APIs for every active zone. Does not wait for anyone to
@@ -318,8 +310,8 @@ Payout = Event duration (hrs)
    2+ hours. Event logged with timestamp and event ID.
 3. **Affected workers identified** — database queried for all workers with an active
    policy in that zone. One claim event created per worker in the queue.
-4. **Fraud model runs** — checks GPS, platform activity, claim history, duplicate
-   filter. Outputs a trust score per worker.
+4. **LLM Fraud Analysis runs** — prompts the model with GPS, platform activity, claim history, duplicate
+   filters. Extracts a synthesized trust score per worker out of the JSON response.
    - Trust score > 0.85 → auto-approve, payout in under 90 seconds
    - Trust score < 0.85 → admin review queue, resolved within 4 hours
 5. **Worker notified** — push notification sent regardless of outcome:
@@ -445,7 +437,7 @@ Each flagged entry shows:
   - Duplicate claim — same event already paid
 - **Action buttons:** `Approve payout` or `Reject claim`
 
-### Section 4: AI Forecast Panel
+### Section 4: LLM Forecast Panel
 Three forward-looking predictions for the coming week:
 
 - **Predicted claims volume** — ₹ range based on IMD weather forecast
@@ -475,13 +467,13 @@ Three forward-looking predictions for the coming week:
 | Redis | Message queue + Celery broker — inter-service communication |
 | PostgreSQL | Primary database — all 5 tables |
 
-### AI / ML
+### LLM / AI
 | Tool | Purpose |
 |---|---|
-| XGBoost | Risk profiling model — zone risk score 1–10 |
-| Isolation Forest (scikit-learn) | Fraud detection — claim trust score 0–1 |
-| Pandas + NumPy | Feature engineering and data preprocessing |
-| NetworkX | Graph analysis for syndicate/ring detection |
+| Groq API (LLaMA-3.3-70B) | Risk profiling model — computes hyper-local zone risk score 1-10 |
+| Groq API (LLaMA-3.3-70B) | Fraud detection — extracts claim trust score 0–1 |
+| Groq API (LLaMA-3.3-70B) | Payout Logic - mathematical caps on daily earnings/coverage |
+| Groq API (LLaMA-3.3-70B) | Graph analysis for syndicate/ring detection |
 
 ### External Integrations
 | Service | Purpose | Mode |
@@ -532,7 +524,7 @@ Three forward-looking predictions for the coming week:
 
 **Week 4**
 - [x] Implement remaining 2 triggers — curfew mock, app outage mock
-- [x] Build basic Isolation Forest fraud model (and LLM Verification)
+- [x] Build basic LLM Fraud analysis framework
 - [x] Build claims processor with auto-approve / manual queue routing
 - [x] Build Android worker app (Kotlin + Jetpack Compose) — all 4 screens
 - [ ] Record 2-minute demo video
@@ -563,7 +555,7 @@ curl -X POST "http://0.0.0.0:8000/analytics/demo/force-trigger"
 ### Phase 3 — Weeks 5–6: Scale & Perfect (Apr 5–17)
 
 **Week 5**
-- [ ] Upgrade fraud model with accelerometer, cell tower, ring detection
+- [ ] Upgrade LLM agent context with accelerometer, cell tower, ring detection
 - [ ] Integrate Razorpay sandbox for live UPI payout simulation
 - [ ] Build insurer admin dashboard — all 4 sections
 - [ ] Add SMS notifications via Twilio trial
@@ -696,14 +688,14 @@ Claim event received
         │
         ▼
 ┌─────────────────────────────┐
-│  Individual fraud model     │  ← accelerometer, cell tower, Wi-Fi,
-│  (Isolation Forest)         │    platform activity, historical zones
+│  Individual LLM analysis    │  ← accelerometer, cell tower, Wi-Fi,
+│  (Groq LLaMA)               │    platform activity, historical zones
 └────────────┬────────────────┘
              │
              ▼
 ┌─────────────────────────────┐
 │  Ring detection layer       │  ← timestamp clustering, shared GPS pins,
-│  (Graph network analysis)   │    shared IPs, device ID overlap
+│  (LLM Network Extraction)   │    shared IPs, device ID overlap
 └────────────┬────────────────┘
              │
       ┌──────┴────────────────────────────────┐
