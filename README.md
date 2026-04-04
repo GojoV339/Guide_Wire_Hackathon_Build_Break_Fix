@@ -62,6 +62,45 @@ of our fraud detection architecture.
   for fast, secure login between deliveries. A web app requires a password or OTP
   every time.
 
+---
+
+## 🛠️ Local Setup & Installation
+
+If you wish to clone the repository and run the entire stack on your local machine:
+
+### 1. Prerequisites
+- **Python 3.9+** installed.
+- **Android Studio** (Koala or newer) for the mobile app.
+- **Groq API Key** (Get one for free at [console.groq.com](https://console.groq.com/)).
+
+### 2. Backend Setup
+```bash
+# Clone the repository
+git clone https://github.com/GojoV339/Guide_Wire_Hackathon_Build_Break_Fix.git
+cd Guide_Wire_Hackathon_Build_Break_Fix/gigshield-backend
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure Environment
+cp .env.example config.env
+# Edit config.env and add your GROQ_API_KEY
+# (Optional) Add OPENWEATHER_API_KEY and AQICN_API_KEY for live data
+
+# Start the server
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 3. Frontend Setup (Android Studio)
+1. Open the `/app` folder in Android Studio.
+2. In `app/build.gradle.kts`, ensure the `API_BASE_URL` points to your local machine:
+   - Use `http://10.0.2.2:8000/` for the Android Emulator.
+   - Use `http://127.0.0.1:8000/` if using `adb reverse`.
+3. Click **Sync Project with Gradle Files**.
+4. Press **Run** to launch on your device/emulator.
+
+---
+
 ### Platform scope
 
 | Surface | Platform |
@@ -196,6 +235,19 @@ No manual reporting required from the worker at any point.
   pick their home delivery zone, declare daily earnings, add their UPI ID, and grant
   sensor permissions (GPS, accelerometer, cell data) with a plain-language
   explanation of why each permission is needed for fraud protection.
+
+### 🧪 Sample Onboarding Data for Demo:
+| Field | Sample Value to Enter |
+|---|---|
+| Phone Number | `9876543210` (or any 10-digit number) |
+| OTP | `123456` (Backend accepts any 6-digit code for demo) |
+| Name | `Ravi Kumar` |
+| Partner ID | `ZP12345` (or `BK9988`) |
+| Home Pincode | `560034` (Koramangala) or `560001` (Majestic) |
+| Daily Earnings | `700` |
+| UPI ID | `ravi@okaxis` |
+
+---
 
 - **Screen 2 — Buy Policy:** After onboarding, the AI has already calculated this
   worker's risk. They see their personal risk score (4.2 out of 10), which zone
@@ -544,22 +596,19 @@ For the best experience, you can run the live Android application directly in yo
 
 The backend natively polls public APIs (Weather/AQI) every 15 minutes looking for disruptions. For the hackathon demo, you can trigger events instantly using the Fast Forward API.
 
-**1. Simulate a Disruption:**
-While the app is open on the `Live Coverage` screen, run:
-```bash
-curl -X POST "https://guide-wire-hackathon-build-break-fix.onrender.com/analytics/demo/force-trigger"
-```
-*The app will instantly detect the outage and calculate an automated payout via Groq LLM.*
+### 🕹️ Control the Simulation
 
-**2. Reset the Simulation:**
-To clear all active alerts and return the dashboard to "Safe" status, run:
-```bash
-curl -X POST "https://guide-wire-hackathon-build-break-fix.onrender.com/analytics/demo/reset-disruptions"
-```
+| Action | **Cloud (Appetize.io)** | **Local (127.0.0.1)** |
+|---|---|---|
+| **Start Disruption** | `curl -X POST "https://guide-wire-hackathon-build-break-fix.onrender.com/analytics/demo/force-trigger"` | `curl -X POST "http://127.0.0.1:8000/analytics/demo/force-trigger"` |
+| **End (Reset) Disruption** | `curl -X POST "https://guide-wire-hackathon-build-break-fix.onrender.com/analytics/demo/reset-disruptions"` | `curl -X POST "http://127.0.0.1:8000/analytics/demo/reset-disruptions"` |
+
+---
 
 ### 💡 Pro Tips for Judges:
 * **OTP Login:** If the "Send OTP" button fails on the first click (due to Render's cold start), simply **click it again**. Any 6-digit code will work (e.g., `123456`).
-* **Dynamic Pricing:** During onboarding, try different pincodes (e.g., `560001` vs `560034`) to see the Groq LLM recalculate the weekly premium based on hyper-local risk factors.
+* **Dynamic Pricing:** During onboarding, try different pincodes (e.g., `560034` vs `560078`) to see the Groq LLM recalculate the weekly premium based on hyper-local risk factors.
+* **Zero-Touch Payout:** Once you trigger the disruption, refresh the **Live Coverage** screen. You will see the Red Alert appear, and beneath it, you'll see **"Payout being automatically calculated..."** with a progress bar. This represents the LLM fraud check running in the background. Once finished, check the **Recent Activity** list at the bottom to see your instant payout!
 
 ---
 
