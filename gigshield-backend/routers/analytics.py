@@ -148,9 +148,17 @@ def force_demo_trigger(db: Session = Depends(get_db)):
 
 @router.post("/demo/reset-disruptions")
 def reset_demo_disruptions(db: Session = Depends(get_db)):
-    """DEMO ONLY: Deactivates all active disruption events to clear the dashboard."""
+    """DEMO ONLY: Deactivates all active disruption events and resets mock flags."""
+    print("[DEMO] Resetting all disruptions...")
+    # Reset mock flags
+    trigger_service.MOCK_OUTAGE_ACTIVE = False
+    trigger_service.MOCK_CURFEW_ZONES = []
+    
+    # Deactivate all disruptions in DB
     active_events = db.query(DisruptionEvent).filter(DisruptionEvent.is_active == True).all()
     for event in active_events:
         event.is_active = False
+    
     db.commit()
-    return {"message": f"Successfully deactivated {len(active_events)} active disruption events."}
+    print(f"[DEMO] Deactivated {len(active_events)} events.")
+    return {"message": f"Successfully deactivated {len(active_events)} active disruption events and reset mock flags."}
