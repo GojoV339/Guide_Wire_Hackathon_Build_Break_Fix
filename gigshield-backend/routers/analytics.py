@@ -144,3 +144,13 @@ def force_demo_trigger(db: Session = Depends(get_db)):
         trigger_service.MOCK_OUTAGE_ACTIVE = False
         
     return {"message": "Simulated Platform Outage disruption successfully triggered. Claims have been automatically evaluated via LLM and processed."}
+
+
+@router.post("/demo/reset-disruptions")
+def reset_demo_disruptions(db: Session = Depends(get_db)):
+    """DEMO ONLY: Deactivates all active disruption events to clear the dashboard."""
+    active_events = db.query(DisruptionEvent).filter(DisruptionEvent.is_active == True).all()
+    for event in active_events:
+        event.is_active = False
+    db.commit()
+    return {"message": f"Successfully deactivated {len(active_events)} active disruption events."}

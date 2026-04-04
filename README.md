@@ -532,23 +532,34 @@ Three forward-looking predictions for the coming week:
 
 ---
 
+## 📱 Interactive Demo (Appetize.io)
+
+For the best experience, you can run the live Android application directly in your browser without installing anything:
+
+**[👉 Launch GigShield on Appetize.io](https://appetize.io/app/b_f7n2uvl2v7ptemrrokc5ncut6y)**
+
+---
+
 ## 🚀 How to Demo Phase 2 (Zero-Touch Claims Workflow)
 
-The backend natively polls public APIs (Weather/AQI) every 15 minutes looking for disruptions. For the 2-minute hackathon demo video, you do not need to wait 15 minutes. A `Fast Forward` API has been deployed.
+The backend natively polls public APIs (Weather/AQI) every 15 minutes looking for disruptions. For the hackathon demo, you can trigger events instantly using the Fast Forward API.
 
-**To trigger an instant disruption:**
-Run the following curl command in a fresh terminal window while your Android emulator sits on the `Live Coverage` screen.
-
+**1. Simulate a Disruption:**
+While the app is open on the `Live Coverage` screen, run:
 ```bash
-curl -X POST "http://0.0.0.0:8000/analytics/demo/force-trigger"
+curl -X POST "https://guide-wire-hackathon-build-break-fix.onrender.com/analytics/demo/force-trigger"
+```
+*The app will instantly detect the outage and calculate an automated payout via Groq LLM.*
+
+**2. Reset the Simulation:**
+To clear all active alerts and return the dashboard to "Safe" status, run:
+```bash
+curl -X POST "https://guide-wire-hackathon-build-break-fix.onrender.com/analytics/demo/reset-disruptions"
 ```
 
-**What happens next:**
-1. The backend triggers a simulated `Platform Outage` event.
-2. The ML model (`services/llm_service.py`) calculates the severity and limits.
-3. The Fraud model skips manual intervention due to a high Trust Score.
-4. The database instantly maps an automated payout to the worker's open policy.
-5. You can visually refresh the `Live Coverage` dashboard in Android and see it morph instantly into **Red Alert**, declaring the outage and showing the active payout logic on screen.
+### 💡 Pro Tips for Judges:
+* **OTP Login:** If the "Send OTP" button fails on the first click (due to Render's cold start), simply **click it again**. Any 6-digit code will work (e.g., `123456`).
+* **Dynamic Pricing:** During onboarding, try different pincodes (e.g., `560001` vs `560034`) to see the Groq LLM recalculate the weekly premium based on hyper-local risk factors.
 
 ---
 

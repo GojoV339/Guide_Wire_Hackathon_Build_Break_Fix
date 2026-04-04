@@ -16,7 +16,7 @@ android {
         versionName = "1.0"
         
         // Use localhost for USB port reversing
-        buildConfigField("String", "API_BASE_URL", "\"http://127.0.0.1:8000/\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://guide-wire-hackathon-build-break-fix.onrender.com/\"")
         
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
